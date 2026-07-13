@@ -56,10 +56,6 @@ st.sidebar.subheader("🧩 Report Sections")
 include_part1 = st.sidebar.toggle("Part 1: Month-to-Date Insights", value=True)
 include_part2 = st.sidebar.toggle("Part 2: SA Daily Reports per City", value=True)
 include_part3 = st.sidebar.toggle("Part 3: Year-to-Date Loans Insights", value=False)
-if include_part3:
-    st.sidebar.caption(
-        "Part 3 is turned on - the Contracts and Risk data files below are required."
-    )
 
 # --- FILE UPLOADS ---
 st.sidebar.subheader("📁 Data Uploads")
