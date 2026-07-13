@@ -3,11 +3,7 @@ app.py
 ------
 MSME Client Survey & SA Performance Report Generator - Streamlit wrapper.
 
-This file is intentionally "thin": it only handles the Streamlit UI,
-user inputs, orchestration, and download/preview widgets. All calculations,
-chart rendering, Excel building, AI narrative generation, and HTML templating
-live in their own modules:
-
+The following are supporting files for the app:
     data_processing.py   -> pandas calculations for Part 1 / 2 / 3
     visuals.py            -> matplotlib chart builders
     ai_narrative.py        -> AI-powered / fallback narrative text
@@ -59,10 +55,11 @@ st.sidebar.header("📋 Report Configurations")
 st.sidebar.subheader("🧩 Report Sections")
 include_part1 = st.sidebar.toggle("Part 1: Month-to-Date Insights", value=True)
 include_part2 = st.sidebar.toggle("Part 2: SA Daily Reports per City", value=True)
-st.sidebar.caption(
-    "Part 3 (Year-to-Date Loans Insights) is included automatically whenever both the "
-    "Contracts and Risk data files are uploaded below."
-)
+include_part3 = st.sidebar.toggle("Part 3: Year-to-Date Loans Insights", value=False)
+if include_part3:
+    st.sidebar.caption(
+        "Part 3 is turned on - the Contracts and Risk data files below are required."
+    )
 
 # --- FILE UPLOADS ---
 st.sidebar.subheader("📁 Data Uploads")
@@ -71,9 +68,14 @@ uploaded_file = st.sidebar.file_uploader(
     f"Upload MSME Client Survey Form (Excel){' *' if needs_survey_file else ''}",
     type=["xlsx"]
 )
-contracts_data_file = st.sidebar.file_uploader("Upload Downloaded Contracts Data from PowerBI (Excel)", type=["xlsx"])
-risk_data_file = st.sidebar.file_uploader("Upload Downloaded Risk Data from PowerBI (Excel)", type=["xlsx"])
-include_part3 = contracts_data_file is not None and risk_data_file is not None
+contracts_data_file = st.sidebar.file_uploader(
+    f"Upload Downloaded Contracts Data from PowerBI (Excel){' *' if include_part3 else ''}",
+    type=["xlsx"]
+)
+risk_data_file = st.sidebar.file_uploader(
+    f"Upload Downloaded Risk Data from PowerBI (Excel){' *' if include_part3 else ''}",
+    type=["xlsx"]
+)
 
 # --- DATE SELECTOR ---
 yesterday = (datetime.today() - timedelta(days=1)).date()
@@ -139,15 +141,19 @@ with st.sidebar.expander("✏️ Edit DSS & Email Assignments", expanded=False):
 
 # --- READINESS CHECK ---
 survey_ready = (not needs_survey_file) or (uploaded_file is not None)
-have_any_section = (needs_survey_file and uploaded_file is not None) or include_part3
-can_process = survey_ready and have_any_section
+part3_ready = (not include_part3) or (contracts_data_file is not None and risk_data_file is not None)
+can_process = survey_ready and part3_ready and (include_part1 or include_part2 or include_part3)
 
 if not include_part1 and not include_part2 and not include_part3:
-    st.info("Turn on at least one report section (Part 1, Part 2, or upload Part 3's files) to proceed.")
+    st.info("Turn on at least one report section (Part 1, Part 2, or Part 3) to proceed.")
 elif not can_process:
     missing_bits = []
     if needs_survey_file and uploaded_file is None:
         missing_bits.append("the MSME Client Survey Excel file")
+    if include_part3 and contracts_data_file is None:
+        missing_bits.append("the Contracts data Excel file")
+    if include_part3 and risk_data_file is None:
+        missing_bits.append("the Risk data Excel file")
     st.info(
         "Welcome! Please upload " + " and ".join(missing_bits or ["the required data file(s)"]) +
         " in the sidebar to begin."
@@ -326,8 +332,7 @@ if can_process:
                             mime="image/png",
                             use_container_width=True
                         )
-
-
+                        
 st.markdown(
     """
     <style>
