@@ -326,3 +326,24 @@ if can_process:
                             mime="image/png",
                             use_container_width=True
                         )
+
+
+st.markdown(
+    """
+    <style>
+    .footer {
+        position: fixed;
+        left: 0;
+        bottom: 0;
+        width: 100%;
+        text-align: center;
+        padding: 10px;
+        font-size: 14px;
+    }
+    </style>
+    <div class="footer">
+        © July 2026, by Deanne Algenio
+    </div>
+    """,
+    unsafe_allow_html=True
+)
