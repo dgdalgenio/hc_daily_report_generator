@@ -14,10 +14,10 @@ An interactive Streamlit web application designed to automate the parsing, proce
 * **Instant Export:** Generates an optimized, standalone HTML asset containing embedded base64 graphics for a plug-and-play email dispatch.
 ---
 # Link to app
-https://msmedailyreportgenerator.streamlit.app/
+https://hcmsmedailyreportgenerator.streamlit.app/
 
 ## How to use
-1. Upload the updated MSME Client Survey Form in the top part of the left sidebar.
+1. Upload the required file in the top part of the left sidebar. Make sure to upload the MSME Client Survey Form.
 2. Select the date of the report. By default, this displays the previous date.
 3. Add your sign-off name (optional).
 4. Use your preferred AI model for insights generation. Input the API Key, if necessary. 
