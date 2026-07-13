@@ -1,0 +1,1 @@
+# hc_daily_report_generator
