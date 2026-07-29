@@ -1,0 +1,12 @@
+streamlit
+pandas
+openpyxl
+matplotlib
+beautifulsoup4
+python-dateutil
+xlsx2html
+openai
+ollama
+groq
+google-generativeai
+lxml
