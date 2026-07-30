@@ -14,7 +14,6 @@ Sections:
 
 import calendar
 import collections
-import re
 from datetime import datetime
 
 import pandas as pd
@@ -35,30 +34,99 @@ def _require_columns(df: pd.DataFrame, required_cols, context: str):
 
 
 # ---------------------------------------------------------------------------
-# PART 1: Month-to-Date Loan Interest Insights
+# Shared helpers: city / agent parsing from the "Assigned Sales Agent" field
+# ---------------------------------------------------------------------------
+# The survey form now stores the assigned agent as a single free-text field
+# formatted like "Taguig City - Jhon Michael Parco", while the city itself
+# lives separately in the "Area" column. We treat "Area" as the source of
+# truth for filtering/grouping, but cross-check it against the city prefix
+# parsed out of "Assigned Sales Agent" and surface any mismatches as
+# non-fatal warnings so bad form entries can be caught.
+
+def _parse_city_from_agent(agent_str):
+    if agent_str is None or (isinstance(agent_str, float) and pd.isna(agent_str)):
+        return None
+    parts = str(agent_str).split(' - ', 1)
+    return parts[0].strip() if parts[0].strip() else None
+
+
+def _parse_agent_name(agent_str):
+    if agent_str is None or (isinstance(agent_str, float) and pd.isna(agent_str)):
+        return 'Unassigned'
+    parts = str(agent_str).split(' - ', 1)
+    return parts[1].strip() if len(parts) > 1 and parts[1].strip() else str(agent_str).strip()
+
+
+def _normalize_city(s):
+    if s is None or (isinstance(s, float) and pd.isna(s)):
+        return ''
+    s = str(s).lower().strip()
+    s = s.split(',')[0].strip()      # drop province suffix, e.g. ", Nueva Ecija"
+    s = s.replace(' city', '').strip()  # drop trailing/leading "City" word
+    return s
+
+
+def _find_city_mismatches(df: pd.DataFrame, area_col='Area', agent_col='Assigned Sales Agent'):
+    """Cross-check Area vs the city prefix in Assigned Sales Agent.
+
+    Returns a list of human-readable warning strings (empty if all match).
+    """
+    if area_col not in df.columns or agent_col not in df.columns:
+        return []
+
+    warnings = []
+    for idx, row in df.iterrows():
+        area = row.get(area_col)
+        agent_city = _parse_city_from_agent(row.get(agent_col))
+        if agent_city and _normalize_city(area) != _normalize_city(agent_city):
+            warnings.append(
+                f"Row {idx}: Area='{area}' does not match the city prefix in "
+                f"Assigned Sales Agent ('{agent_city}')."
+            )
+    return warnings
+
+
+# ---------------------------------------------------------------------------
+# Result-of-Visit bucketing (visualization / Part 2 pivot only — the
+# detailed Part 1 table keeps the raw dropdown values as-is, per business
+# decision: granular "Result of Visit" categories are no longer collapsed
+# in the detail views).
 # ---------------------------------------------------------------------------
 
-def map_responses(val):
-    """Bucket raw survey responses into simplified interest categories."""
-    if val in ['Yes']:
-        return 'Interested Customer'
-    if val in ['Yes, not valid permit', 'Yes, but not valid permit']:
-        return 'Interested, no permit'
-    if val in ['Yes, valid permit, but no proof of maturity',
-               'Yes valid permit, but no proof of business maturity']:
-        return 'Interested, no maturity'
-    if val in ['No']:
+def bucket_result_of_visit(val):
+    """Simple bucket classification used ONLY for chart visualization and
+    the Part 2 SA pivot tables. Anything containing 'Not Interested' is
+    Not Interested; anything containing 'Interested' or 'Eligible' is
+    Interested/Eligible; everything else (Undecided, Store Closed, Refused
+    Visit, etc.) falls into Other.
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return 'Other'
+    s = str(val).strip().lower()
+    if 'not interested' in s:
         return 'Not Interested'
+    if 'interested' in s or 'eligible' in s:
+        return 'Interested/Eligible'
     return 'Other'
 
+
+# Kept as an alias so any other module importing the old name still works.
+map_responses = bucket_result_of_visit
+
+
+# ---------------------------------------------------------------------------
+# PART 1: Month-to-Date Loan Interest Insights
+# ---------------------------------------------------------------------------
 
 def filter_mtd_data(data: pd.DataFrame, monthago_date, report_date, active_cities):
     """Filter the raw survey data to the MTD window and active cities.
 
     Raises ReportDataError if required columns are missing or the resulting
     filtered frame is empty.
+
+    Returns (filtered_data, city_mismatch_warnings)
     """
-    _require_columns(data, ['Completion time', 'Assigned City'], "Part 1 (MTD data)")
+    _require_columns(data, ['Completion time', 'Area', 'Assigned Sales Agent'], "Part 1 (MTD data)")
 
     data = data.copy()
     try:
@@ -71,7 +139,7 @@ def filter_mtd_data(data: pd.DataFrame, monthago_date, report_date, active_citie
         (data['Completion time'] <= pd.Timestamp(report_date).normalize())
     ].copy()
 
-    filtered_data = filtered_data[filtered_data['Assigned City'].isin(active_cities)]
+    filtered_data = filtered_data[filtered_data['Area'].isin(active_cities)]
 
     if filtered_data.empty:
         raise ReportDataError(
@@ -79,37 +147,38 @@ def filter_mtd_data(data: pd.DataFrame, monthago_date, report_date, active_citie
             "Double-check the report date and your City/DSS mapping list."
         )
 
-    return filtered_data
+    city_warnings = _find_city_mismatches(filtered_data)
+
+    return filtered_data, city_warnings
 
 
 def compute_interest_summary(filtered_data: pd.DataFrame):
-    """Compute the MTD interest crosstab (raw, for plotting) and the
-    formatted summary table (for the HTML report).
+    """Compute the MTD 'LatestResult' crosstab, kept UN-bucketed (raw
+    dropdown values) as the detailed table for the HTML report, plus a
+    simplified bucket crosstab (Interested/Eligible vs Not Interested vs
+    Other) used only for the chart visualization.
 
-    Returns (interest_summary_raw, interest_summary_formatted)
+    Returns (interest_summary_raw, interest_summary_formatted, bucket_summary_raw)
     """
-    _require_columns(filtered_data, ['Interesado sa pautang?'], "Part 1 (interest column)")
+    _require_columns(filtered_data, ['LatestResult'], "Part 1 (interest column)")
 
-    replace_vals_col1 = {
-        'Yes, not valid permit': 'Yes, but not valid permit',
-        'Yes, valid permit, but no proof of maturity': 'Yes valid permit, but no proof of business maturity'
-    }
-    for old_val, new_val in replace_vals_col1.items():
-        filtered_data.loc[filtered_data['Interesado sa pautang?'] == old_val, 'Interesado sa pautang?'] = new_val
-
-    interest_summary_raw = pd.crosstab(filtered_data['Assigned City'], filtered_data['Interesado sa pautang?'])
+    interest_summary_raw = pd.crosstab(filtered_data['Area'], filtered_data['LatestResult'])
 
     if interest_summary_raw.empty:
         raise ReportDataError("Part 1: interest summary crosstab came back empty. No data to visualize.")
+
+    filtered_data = filtered_data.copy()
+    filtered_data['Interest Bucket'] = filtered_data['LatestResult'].apply(bucket_result_of_visit)
+    bucket_summary_raw = pd.crosstab(filtered_data['Area'], filtered_data['Interest Bucket'])
 
     interest_summary = interest_summary_raw.copy()
     interest_summary['Total Surveyed'] = interest_summary.sum(axis=1).apply(int)
 
     sa_cols = [col for col in filtered_data.columns if 'Assigned Sales Agent' in col]
     if not sa_cols:
-        raise ReportDataError("Part 1: no 'Assigned Sales Agent' columns found to compute Survey Rate per SA.")
+        raise ReportDataError("Part 1: no 'Assigned Sales Agent' column found to compute Survey Rate per SA.")
 
-    tallied_SAs = filtered_data[['Assigned City'] + sa_cols].groupby('Assigned City').nunique().sum(axis=1)
+    tallied_SAs = filtered_data[['Area'] + sa_cols].groupby('Area').nunique().sum(axis=1)
     interest_summary['Survey Rate per SA'] = (interest_summary['Total Surveyed'] / tallied_SAs).round(2)
 
     for col in interest_summary.columns[:-2]:
@@ -130,20 +199,20 @@ def compute_interest_summary(filtered_data: pd.DataFrame):
     )
 
     cols = list(interest_summary.columns)
-    if 'Interesado sa pautang?' in cols:
-        interest_summary = interest_summary.drop(columns=['Interesado sa pautang?'])
+    if 'LatestResult' in cols:
+        interest_summary = interest_summary.drop(columns=['LatestResult'])
         cols = list(interest_summary.columns)
 
     cols_to_prioritize = ['Total Surveyed', 'Survey Rate per SA']
     cols = cols_to_prioritize + [c for c in cols if c not in cols_to_prioritize]
     interest_summary = interest_summary[cols]
 
-    return interest_summary_raw, interest_summary
+    return interest_summary_raw, interest_summary, bucket_summary_raw
 
 
 def extract_disinterest_responses(filtered_data: pd.DataFrame):
-    """Pull cleaned free-text responses to the 'Bakit hindi interesado?' question."""
-    target_col = 'Bakit hindi interesado?\n'
+    """Pull cleaned free-text responses to the 'Bakit ayaw sa Home Credit?' question."""
+    target_col = 'Bakit ayaw sa Home Credit?'
     responses = filtered_data[target_col].unique() if target_col in filtered_data.columns else []
     clean_responses = [
         str(x).strip() for x in responses
@@ -159,9 +228,16 @@ def extract_disinterest_responses(filtered_data: pd.DataFrame):
 def build_city_pivot_tables(data: pd.DataFrame, report_date, active_cities):
     """Build per-city SA performance pivot dataframes for the given report_date.
 
-    Returns (report_df_dict, totals_df, cities_lst)
+    City is taken from the 'Area' column (cross-checked against the city
+    prefix in 'Assigned Sales Agent'), and the SA name is parsed out of the
+    'Assigned Sales Agent' field (format: "<City> - <Agent Name>"). Response
+    grouping uses the simplified Interested/Eligible vs Not Interested vs
+    Other bucket derived from 'LatestResult'.
+
+    Returns (report_df_dict, totals_df, cities_lst, city_mismatch_warnings)
     """
-    _require_columns(data, ['Completion time', 'Interesado sa pautang?'], "Part 2 (SA pivot data)")
+    _require_columns(data, ['Completion time', 'Area', 'Assigned Sales Agent', 'LatestResult'],
+                      "Part 2 (SA pivot data)")
 
     data = data.copy()
     try:
@@ -169,44 +245,33 @@ def build_city_pivot_tables(data: pd.DataFrame, report_date, active_cities):
     except Exception as e:
         raise ReportDataError(f"Part 2: could not parse 'Completion time' column as dates ({e}).")
 
-    asa_lst = [col for col in data.columns if 'Assigned Sales Agent' in col]
-    if not asa_lst:
-        raise ReportDataError("Part 2: no 'Assigned Sales Agent' columns found in the survey data.")
-
-    cities_lst = []
-    for loc_col in asa_lst:
-        match = re.findall(r'\((.*?)\)', loc_col)
-        if match:
-            cities_lst.append(match[0])
-    cities_lst = [c for c in cities_lst if c in active_cities]
+    cities_lst = [c for c in active_cities if c in set(data['Area'].dropna().unique())]
 
     if not cities_lst:
         raise ReportDataError(
-            "Part 2: none of the 'Assigned Sales Agent' city columns match your active City/DSS mapping list."
+            "Part 2: none of the survey data's 'Area' values match your active City/DSS mapping list."
         )
 
-    pivot_cols = ['Name of SA', 'Interested Customer', 'Interested, no permit',
-                  'Interested, no maturity', 'Not Interested', 'Total Leads EOD']
-    response_categories = ['Interested Customer', 'Interested, no permit',
-                            'Interested, no maturity', 'Not Interested']
+    filtered_bydate = data[data['Completion time'].dt.date == report_date]
+    city_warnings = _find_city_mismatches(filtered_bydate)
+
+    pivot_cols = ['Name of SA', 'Interested/Eligible', 'Not Interested', 'Other', 'Total Leads EOD']
+    response_categories = ['Interested/Eligible', 'Not Interested', 'Other']
 
     report_df_dict = {}
-    for loc_col in asa_lst:
-        city_match = re.findall(r'\((.*?)\)', loc_col)
-        if not city_match or city_match[0] not in active_cities:
-            continue
-        assigned_city = city_match[0]
-
-        filtered_bydate = data[data['Completion time'].dt.date == report_date]
-        filtered_bydate_byloc = filtered_bydate[~filtered_bydate[loc_col].isna()][[loc_col, 'Interesado sa pautang?']]
+    for assigned_city in cities_lst:
+        filtered_bydate_byloc = filtered_bydate[
+            filtered_bydate['Area'] == assigned_city
+        ][['Assigned Sales Agent', 'LatestResult']].dropna(subset=['Assigned Sales Agent'])
 
         if filtered_bydate_byloc.empty:
             report_df_dict[assigned_city] = pd.DataFrame(columns=pivot_cols)
             continue
 
         df_temp = filtered_bydate_byloc.copy()
-        df_temp['Response_Group'] = df_temp['Interesado sa pautang?'].apply(map_responses)
-        grouped = df_temp.groupby([loc_col, 'Response_Group']).size().unstack(fill_value=0).reindex(
+        df_temp['Name of SA'] = df_temp['Assigned Sales Agent'].apply(_parse_agent_name)
+        df_temp['Response_Group'] = df_temp['LatestResult'].apply(bucket_result_of_visit)
+        grouped = df_temp.groupby(['Name of SA', 'Response_Group']).size().unstack(fill_value=0).reindex(
             columns=response_categories, fill_value=0
         )
         grouped['Total Leads EOD'] = grouped.sum(axis=1)
@@ -229,7 +294,7 @@ def build_city_pivot_tables(data: pd.DataFrame, report_date, active_cities):
         totals_df = totals_df.transpose().drop(columns=['Name of SA'])
         totals_df.loc['Total'] = totals_df.sum(axis=0)
 
-    return report_df_dict, totals_df, cities_lst
+    return report_df_dict, totals_df, cities_lst, city_warnings
 
 
 # ---------------------------------------------------------------------------

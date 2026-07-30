@@ -8,8 +8,6 @@ and (b) actually produced usable content. Section numbering ("Part 1",
 "Part 1, Part 3" if Part 2 was skipped.
 """
 
-from io import StringIO
-
 import pandas as pd
 
 
@@ -26,25 +24,35 @@ BASE_STYLE = """
 
 
 def save_interest_summary_as_html_string(interest_summary: pd.DataFrame):
-    """Renders the MTD interest summary dataframe as a styled HTML table string."""
-    html_table = interest_summary.reset_index().to_html(
+    """Renders the MTD interest summary dataframe as a styled HTML table string.
+
+    The underlying dataframe is indexed by Area (city) with one column per
+    'Result of Visit' category (plus Total Surveyed / Survey Rate per SA).
+    Since the new survey form has ~20 granular result categories, that
+    layout produces a very wide, hard-to-read table. We transpose it here
+    so each city becomes a column and each category becomes a row instead.
+    """
+    df = interest_summary.copy()
+    df = df.drop(columns=["LatestResult"], errors="ignore")
+
+    transposed = df.transpose()
+    transposed.index.name = "Result of Visit"
+    transposed.columns.name = None
+    transposed = transposed.reset_index()
+
+    html_table = transposed.to_html(
         index=False,
         classes="table table-striped custom-loan-table"
     )
 
-    df = pd.read_html(StringIO(html_table))[0]
-    df = df.drop(columns=["Interesado sa pautang?"], errors="ignore")
+    n_city_cols = len(transposed.columns) - 1
+    city_col_width = max(int(84 / n_city_cols), 8) if n_city_cols else 14
 
-    html_table = df.to_html(
-        index=False,
-        classes="table table-striped custom-loan-table"
-    )
-
-    custom_css = """
+    custom_css = f"""
     <style>
-        .custom-loan-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
-        .custom-loan-table th:nth-child(1), .custom-loan-table td:nth-child(1) { width: 16%; text-align: left; }
-        .custom-loan-table th:not(:nth-child(1)), .custom-loan-table td:not(:nth-child(1)) { width: 14%; text-align: center; }
+        .custom-loan-table {{ width: 100%; table-layout: fixed; border-collapse: collapse; }}
+        .custom-loan-table th:nth-child(1), .custom-loan-table td:nth-child(1) {{ width: 16%; text-align: left; white-space: normal; }}
+        .custom-loan-table th:not(:nth-child(1)), .custom-loan-table td:not(:nth-child(1)) {{ width: {city_col_width}%; text-align: center; }}
     </style>
     """
     return custom_css + html_table

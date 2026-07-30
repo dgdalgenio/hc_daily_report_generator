@@ -116,7 +116,7 @@ if "cities_dict" not in st.session_state:
     }
 
 with st.sidebar.expander("➕ Add a New City/Location"):
-    new_city_name = st.text_input("Enter New City Name (Must match Excel column name exactly)")
+    new_city_name = st.text_input("Enter New City Name (Must match the 'Area' column value in the Excel file exactly)")
     if st.button("Add City to List", use_container_width=True):
         if new_city_name and new_city_name not in st.session_state.cities_dict:
             st.session_state.cities_dict[new_city_name] = ("", "")
@@ -172,11 +172,16 @@ if can_process:
                     data = pd.read_excel(uploaded_file)
                     monthago_date = pd.Timestamp(report_date - relativedelta(days=1, months=1))
 
-                    filtered_data = filter_mtd_data(data, monthago_date, report_date, active_cities)
-                    interest_summary_raw, interest_summary = compute_interest_summary(filtered_data)
+                    filtered_data, city_warnings = filter_mtd_data(data, monthago_date, report_date, active_cities)
+                    if city_warnings:
+                        section_errors.append(
+                            f"Part 1: found {len(city_warnings)} row(s) where 'Area' doesn't match the city "
+                            f"in 'Assigned Sales Agent'. First example: {city_warnings[0]}"
+                        )
+                    interest_summary_raw, interest_summary, bucket_summary_raw = compute_interest_summary(filtered_data)
 
                     raw_png_bytes, img_html = make_mtd_loan_interest_chart(
-                        interest_summary_raw, monthago_date, report_date
+                        bucket_summary_raw, monthago_date, report_date
                     )
                     mtd_table_html = save_interest_summary_as_html_string(interest_summary)
 
@@ -204,9 +209,14 @@ if can_process:
                 try:
                     # Re-read a fresh copy so Part 1's in-place edits don't leak in
                     data2 = pd.read_excel(uploaded_file)
-                    report_df_dict, totals_df, cities_lst = build_city_pivot_tables(
+                    report_df_dict, totals_df, cities_lst, city_warnings2 = build_city_pivot_tables(
                         data2, report_date, active_cities
                     )
+                    if city_warnings2:
+                        section_errors.append(
+                            f"Part 2: found {len(city_warnings2)} row(s) where 'Area' doesn't match the city "
+                            f"in 'Assigned Sales Agent'. First example: {city_warnings2[0]}"
+                        )
                     wb, raw_xlsx_bytes, excel_html_content = build_city_pivot_workbook(
                         report_df_dict, totals_df, location_to_dss_dict, cities_lst, report_date
                     )

@@ -13,7 +13,7 @@ import re
 
 SYSTEM_PROMPT_INSTRUCTION = (
     "You are an expert financial data analyst. Analyze the following open-ended survey "
-    "responses in English, Tagalog, or Taglish answering 'Bakit hindi interesado?' "
+    "responses in English, Tagalog, or Taglish answering 'Bakit ayaw sa Home Credit?' "
     "in the context of loan selling for MSMEs.\n\n"
     "Output must follow this HTML structure precisely:\n"
     "<h3>Reasons for not being interested in Home Credit Cash Loan:</h3>\n"
